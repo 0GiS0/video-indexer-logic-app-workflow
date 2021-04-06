@@ -13,7 +13,7 @@ terraform init \
     -backend-config="access_key=${STORAGE_ACCOUNT_ACCESS_KEY}"
 
 terraform validate
-terraform plan -var="azuread_domain=microsoft.onmicrosoft.com" -out api-connections.tfplan
+terraform plan -var="azuread_domain=YOUR_DOMAIN.onmicrosoft.com" -out api-connections.tfplan
 terraform apply api-connections.tfplan
 
 
