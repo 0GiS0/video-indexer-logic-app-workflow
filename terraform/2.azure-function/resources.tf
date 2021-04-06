@@ -98,6 +98,7 @@ resource "azurerm_function_app" "function" {
   }
 
   provisioner "local-exec" {
+    #tested on mac only
     command = "az ams account sp create --account-name ${azurerm_media_services_account.ams.name} --resource-group ${azurerm_resource_group.rg.name} | jq 'with_entries( .key = \"AzureMediaServices__\"+.key)' > settings.json && az webapp config appsettings set -g ${azurerm_resource_group.rg.name} -n ${azurerm_function_app.function.name} --settings @settings.json"
   }
 }
