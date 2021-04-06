@@ -35,3 +35,9 @@ override.tf.json
 terraform.rc
 
 *.hcl
+
+#Mac stuff
+.DS_Store
+
+#VSCode stuff
+.vscode
