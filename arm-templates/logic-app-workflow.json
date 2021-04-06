@@ -1,0 +1,272 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "api_connections_location": {
+            "type": "String"
+        },
+        "location": {
+            "type": "String"
+        },
+        "workflow_name": {
+            "defaultValue": "video-indexer-flow",
+            "type": "String"
+        },
+        "api_connections_resource_group": {
+            "type": "String"
+        },
+        "storage_resource_group": {
+            "type": "String"
+        },
+        "storage_name": {
+            "type": "String"
+        },
+        "azure_function_resource_group": {
+            "type": "String"
+        },
+        "azure_function_name": {
+            "type": "String"
+        }
+    },
+    "variables": {
+        "storageAccounts_amsv3store_externalid": "[concat(subscription().id,'/resourceGroups/',parameters('storage_resource_group'),'/providers/Microsoft.Storage/storageAccounts/', parameters('storage_name'))]",
+        "sites_amsv3func_externalid": "[concat(subscription().id, '/resourceGroups/', parameters('azure_function_resource_group'),'/providers/Microsoft.Web/sites/',parameters('azure_function_name'))]",
+        "connections_azureblob_externalid": "[concat(subscription().id,'/resourceGroups/',parameters('api_connections_resource_group'),'/providers/Microsoft.Web/connections/azureblob')]",
+        "connections_azureeventgrid_externalid": "[concat(subscription().id,'/resourceGroups/',parameters('api_connections_resource_group'),'/providers/Microsoft.Web/connections/azureeventgrid')]",
+        "connections_cosmosdb_externalid": "[concat(subscription().id,'/resourceGroups/',parameters('api_connections_resource_group'),'/providers/Microsoft.Web/connections/documentdb')]",
+        "blobUrl": "[concat('https://',parameters('storage_name'),'.blob.core.windows.net')]"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('workflow_name')]",
+            "location": "[parameters('location')]",
+            "properties": {
+                "state": "Enabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "When_a_resource_event_occurs": {
+                            "splitOn": "@triggerBody()",
+                            "type": "ApiConnectionWebhook",
+                            "inputs": {
+                                "body": {
+                                    "properties": {
+                                        "destination": {
+                                            "endpointType": "webhook",
+                                            "properties": {
+                                                "endpointUrl": "@{listCallbackUrl()}"
+                                            }
+                                        },
+                                        "filter": {
+                                            "includedEventTypes": [
+                                                "Microsoft.Storage.BlobCreated"
+                                            ],
+                                            "subjectBeginsWith": "/blobServices/default/containers/videos/"
+                                        },
+                                        "topic": "[variables('storageAccounts_amsv3store_externalid')]"
+
+                                    }
+                                },
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azureeventgrid']['connectionId']"
+                                    }
+                                },
+                                "path": "[concat(subscription().id,'/providers/Microsoft.Storage.StorageAccounts/resource/eventSubscriptions')]",
+                                "queries": {
+                                    "x-ms-api-version": "2017-06-15-preview"
+                                }
+                            }
+                        }
+                    },
+                    "actions": {
+                        "Create_SAS_URI_by_path": {
+                            "runAfter": {
+                                "Initialize_variable": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "body": {
+                                    "Permissions": "Read"
+                                },
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['azureblob']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "path": "/datasets/default/CreateSharedLinkByPath",
+                                "queries": {
+                                    "path": "@{replace(body('Parse_JSON')?['data']?['url'],variables('blobUrl'),'')}"
+                                }
+                            }
+                        },
+                        "Create_or_update_document": {
+                            "runAfter": {
+                                "GetInsights": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "body": "@body('GetInsights')",
+                                "headers": {
+                                    "x-ms-documentdb-raw-partitionkey": "\"en-US\""
+                                },
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['cosmosdb']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "path": "/dbs/@{encodeURIComponent('Insights')}/colls/@{encodeURIComponent('videos')}/docs"
+                            }
+                        },
+                        "GetInsights": {
+                            "runAfter": {
+                                "Create_SAS_URI_by_path": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Function",
+                            "inputs": {
+                                "body": {
+                                    "url": "@body('Create_SAS_URI_by_path')?['WebUrl']"
+                                },
+                                "function": {
+                                    "id": "[concat(variables('sites_amsv3func_externalid'), '/functions/GetInsights')]"
+
+                                }
+                            }
+                        },
+                        "Parse_JSON": {
+                            "runAfter": {},
+                            "type": "ParseJson",
+                            "inputs": {
+                                "content": "@triggerBody()",
+                                "schema": {
+                                    "properties": {
+                                        "data": {
+                                            "properties": {
+                                                "api": {
+                                                    "type": "string"
+                                                },
+                                                "blobType": {
+                                                    "type": "string"
+                                                },
+                                                "clientRequestId": {
+                                                    "type": "string"
+                                                },
+                                                "contentLength": {
+                                                    "type": "integer"
+                                                },
+                                                "contentType": {
+                                                    "type": "string"
+                                                },
+                                                "eTag": {
+                                                    "type": "string"
+                                                },
+                                                "requestId": {
+                                                    "type": "string"
+                                                },
+                                                "sequencer": {
+                                                    "type": "string"
+                                                },
+                                                "storageDiagnostics": {
+                                                    "properties": {
+                                                        "batchId": {
+                                                            "type": "string"
+                                                        }
+                                                    },
+                                                    "type": "object"
+                                                },
+                                                "url": {
+                                                    "type": "string"
+                                                }
+                                            },
+                                            "type": "object"
+                                        },
+                                        "dataVersion": {
+                                            "type": "string"
+                                        },
+                                        "eventTime": {
+                                            "type": "string"
+                                        },
+                                        "eventType": {
+                                            "type": "string"
+                                        },
+                                        "id": {
+                                            "type": "string"
+                                        },
+                                        "metadataVersion": {
+                                            "type": "string"
+                                        },
+                                        "subject": {
+                                            "type": "string"
+                                        },
+                                        "topic": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        },
+                        "Initialize_variable": {
+                            "runAfter": {
+                                "Parse_JSON": [
+                                    "Succeeded"
+                                ]
+                            },                            
+                            "type": "InitializeVariable",
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "blobUrl",
+                                        "type": "string",
+                                        "value": "[variables('blobUrl')]"
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "azureblob": {
+                                "connectionId": "[variables('connections_azureblob_externalid')]",
+                                "connectionName": "azureblob",
+                                "id": "[concat(subscription().id,'/providers/Microsoft.Web/locations/',parameters('api_connections_location'),'/managedApis/azureblob')]"
+
+                            },
+                            "azureeventgrid": {
+                                "connectionId": "[variables('connections_azureeventgrid_externalid')]",
+                                "connectionName": "azureeventgrid",
+                                "id": "[concat(subscription().id,'/providers/Microsoft.Web/locations/',parameters('api_connections_location'),'/managedApis/azureeventgrid')]"
+
+                            },
+                            "cosmosdb": {
+                                "connectionId": "[variables('connections_cosmosdb_externalid')]",
+                                "connectionName": "cosmosdb",
+                                "id": "[concat(subscription().id,'/providers/Microsoft.Web/locations/',parameters('api_connections_location'),'/managedApis/documentdb')]"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}
